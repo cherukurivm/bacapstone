@@ -6,6 +6,10 @@ suppressMessages(library(ggplot2))
 suppressMessages(library(DataExplorer))
 suppressMessages(library(data.table))
 data <- read.csv("data.csv")
+str(data)
+summary(data$Quantity)
+summary(data$UnitPrice)
+#hist(data$CustomerID)
 df_status(data)
 plot_missing(data)
 map_df(data, function(x) sum(is.na(x)))
@@ -59,6 +63,7 @@ options(repr.plot.width=6, repr.plot.height=8)
 data_pos %>% group_by(Country) %>% summarise(revenue = sum(Sale_amount)) %>% 
   ggplot(aes(y=revenue/1000000, x=Country)) + geom_bar(stat="identity") +
   labs(x="Country", y="Sales in million") + coord_flip()
+
 data_pos %>% filter(Year==2011, Country != "United Kingdom") %>% group_by(Year, Country) %>% 
   summarise(revenue = sum(Sale_amount)) %>% arrange(desc(revenue))
 options(repr.plot.width=8, repr.plot.height=6)
