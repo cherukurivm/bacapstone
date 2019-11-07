@@ -1,0 +1,266 @@
+---
+title: "eCommerceData"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Index
+
+* [Introduction](#intro)
+* [Libraries](#libs)
+* [Import Data](#import)
+* [Data Overview](#overview)
+* [Feature engineering](#feature)
+* [Data exploration](#explore)
+
+## Introduction {#intro}
+
+This is a data set from UK-based and registered non-store online retail company. This data set contains all the transactions occurring between 01/12/2010 and 09/12/2011.The company mainly sells unique all-occasion gifts. Many customers of the company are wholesalers."
+
+The goal of this analyses is to visualize the sales from this company.
+
+## Libararies {#libs}
+
+The following libraries were loaded for the data analysis.
+
+```{r, echo=F}
+library(tidyr) # data transformations
+library(dplyr) # data transformations
+library(ggplot2) # data visualization
+library(mice) # missings in the data set
+library(VIM)  # missings in the data set
+library(lubridate) #for working with dates
+```
+
+## Import data {#import}
+
+```{r}
+data <- read.csv("data.csv")
+```
+
+## Data Overview {#overview}
+
+I start with getting an general overview of the data set, including the number of observations, variables and a short explanation of the variables. Next I check if the data set contains missings. Finally I explore every variable in more detail.
+
+```{r}
+glimpse(data)
+```
+
+The data set contains 8 variables and almost 520,000 observations. The following variables are included in the data set: InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustumerID, Country.
+
+|Variable Name|Description                         |
+|-------------|------------------------------------|
+|InvoiceNo    |Unique ID to identify each Invoice  |
+|StockCode    |Unique ID for each item in stock    |
+|Description  |A short description for each item   |
+|Quantity     |Number of items bought              |
+|UnitPrice    |The price of each item              |
+|CustumerID   |Unique ID for each custumer         |
+|Country      |The country were the custumer lives |  
+
+### Missing data
+
+```{r}
+a = aggr(data)
+plot(a)
+summary(a)
+```
+In 135080 cases, the custumer ID is missing. For know I ignore this, since the other data is complete
+
+```{r}
+#show first 10 rows of data
+#head(data[is.na(data$CustomerID),], 10)
+
+#show last 10 rows of data
+#tail(data[is.na(data$CustomerID),], 10)
+```
+
+### Explore the variables {.tabset}
+
+#### InVoiceNo
+
+An invoice is a commercial document issued by a seller to a buyer, relating to a sale transaction and indicating the products, quantities and agreed prices for products or services the seller had provided to the buyer. For more information see the following wikilink: https://en.wikipedia.org/wiki/Invoice
+
+```{r}
+length(unique(data$InvoiceNo))
+```
+There are 25900 unique InvoiceNo, meaning that between 01/12/2010 and 09/12/2011 unique transactions were performed. Note that the one Invoice can take several rows, as shown below. This is because for every ordered item one row is used. For example a custumer has ordered 7 items, to describe this invoice, seven rows were needed (for every item one row).
+```{r}
+data[data$InvoiceNo=="536365",]
+```
+
+#### StockCode
+
+Every product sold (stock) by the company has an unique ID. 
+
+```{r}
+length(unique(data$StockCode))
+```
+There are 4070 unique StockCodes, meaning the the company sold between 01/12/2010 and 09/12/2011 4070 different products.
+
+#### Description
+
+A short description of the product sold by the company. 
+
+```{r}
+length(unique(data$Description))
+```
+There are 4224 unique descriptions, which is more than the number of unique StockCodes (n=4070). How is this possible?
+
+#### Quantity
+
+This variable gives information about the number of products bought by each customer.
+
+```{r}
+summary(data$Quantity)
+```
+
+The avarage number of items bought is less than 10. The minimum number is -80995 and the maximum number is 80995. Lets check these odd numbers. 
+
+```{r}
+filter(data, Quantity==c(-80995.00,80995.00))
+```
+Perhaps someone made a mistake and ordered 80995 PAPERCRAFT, LITTLE BIRDIES on 12/9/2011 9:15, on 12/9/2011 9:27 this mistake was corrected by repaying the order.
+
+Lets check of there are more negative values for the variable Quantity.
+```{r}
+dim(filter(data, Quantity<1))
+head(filter(data, Quantity<1), 10) # first 10 rows of data
+```
+There are 10,624 cases with negative values for the variable Quantity. 
+
+#### InvoiceDate
+
+```{r}
+head(select(data, InvoiceDate), 10)
+```
+The variabele InvoiceDate contains information about the date and the time when the transaction happened. This should be split in InvoiceDate_1 and InvoiceTime (see section Feature Engineering).
+
+```{r}
+length(unique(data$InvoiceDate))
+```
+There are 23260 unique values for InvoiceDate
+
+#### UnitPrice
+
+The variable UnitPrice gives information about the price for each unit. When the variable UnitPrice is multiplied by the number of items ordered, you can calculate the amount spent for each transaction. It is also possible the calculate the amount each customer spends per year or the total amount per month or for the whole year (see section Feature Engineering).
+
+```{r}
+summary(data$UnitPrice)
+```
+The mean unit price is 4.61. But here we also have negative numbers (-11062.06) and a very large positive number (38970). Lets check this and also check if there are unitPrices of zero.
+
+```{r}
+data[(data$UnitPrice<0 | data$UnitPrice==38970.00),]
+```
+In these cases there were no items sold, but apperently something was corrected. Lets remove these odd numbers and get some summary statistics for the price per unit.
+
+```{r}
+nd <- data %>% filter(UnitPrice>=0 &UnitPrice!=38970.00) 
+
+summary(nd$UnitPrice)
+```
+Now the minimum unit price is 0.00 and the maximum unit price is  17836.460, the avarage unit price is 4.58.
+
+#### CustomerID
+
+This gives an ID to each customer
+
+```{r}
+length(unique(data$CustomerID))
+```
+There are 4373 unique customers. This is less than the number of unique InvoiceNo, meaning the at least one customer placed more than one order. 
+
+#### Country
+
+This gives information about the country were the customer lives.
+
+```{r}
+length(unique(data$Country))
+```
+The custumers are from 38 different countries. Lets visualize this.
+
+```{r}
+#reorder the table and reset the factor to that ordering
+data %>%
+  group_by(Country) %>%                              # calculate the counts
+  summarize(counts = n()) %>%
+  arrange(counts) %>%                                # sort by counts
+  mutate(Country = factor(Country, Country)) %>%     # reset factor
+  ggplot(aes(x=Country, y=counts)) +                 # plot 
+    geom_bar(stat="identity") +                      # plot histogram
+    coord_flip()                                     # flip the coordinates
+```
+The goods are shipped to 38 unique countries. The majority of goods is shipped to the United Kingdom. After the United Kingdom, Germany, France and EIRE (=Ireland) are the most important countries.
+
+### Feature engineering {#feature}
+
+I start with the variable InvoiceDate, this variable contains information about the date and the time the custumer ordered something. Lets examine this variable in more detail
+```{r}
+data$InvoiceDate[1:10]
+```
+The dates are in month/day/year hour:minute. At this point the variable InvoiceDate is a factor variables. This should be transformed into a datetime variable. To do so I use the package lubridate. 
+
+```{r}
+# make two variables InvoiceDate and InvoiceTime
+#data <- separate(data, InvoiceDate, c("InvoiceDate", "InvoiceTime"), sep=" ") 
+data$InvoiceDate <- mdy_hm(data$InvoiceDate) #make datetime object
+#data$InvoiceTime <- hm(data$InvoiceTime) # make datetime objects
+head(data)
+```
+We now have the data transformed into datetime data. From the variable InvoiceDate we can extract the year, month, day and time.
+
+```{r}
+data$InvoiceYear <- year(data$InvoiceDate)
+data$InvoiceMonth <- month(data$InvoiceDate,label=T)
+data$InvoiceWeekday <- wday(data$InvoiceDate, label=T)
+data$InvoiceHour <- hour(data$InvoiceDate)
+```
+
+### Data exploration {.tabset}
+
+#### Date and time
+
+Here we have the number of transactions per month for 2011.
+```{r}
+timedata <- data %>% 
+  filter(InvoiceYear==2011) %>% 
+  count(InvoiceMonth)  #count the number of invoices per month for 2011
+
+ggplot(timedata, aes(InvoiceMonth, n)) +  #plot the number of invoices per day               
+  geom_col() +
+  labs(x="Month", y="Number of invoices")
+
+```
+
+It seems that the number of transactions is rising from September and the highest in November. In december the lowest number of transactions is performed. 
+
+Lets explore which days are the most busy ones
+
+```{r}
+timedata <- data %>% 
+  filter(InvoiceYear==2011) %>% 
+  count(InvoiceWeekday)
+
+ggplot(timedata, aes(InvoiceWeekday, n)) +  #plot the number of invoices per day               
+    geom_col() +
+  labs(x="Week", y="Number of invoices") 
+```
+
+Most transactions are placed on monday, tuesday, wednesday and thursday.
+
+```{r}
+timedata <- data %>% 
+ filter(InvoiceYear==2011) %>% 
+  count(InvoiceHour)
+
+ggplot(timedata, aes(InvoiceHour, n)) +  #plot the number of invoices per day               
+    geom_col() +
+  labs(x="hour", y="Number of invoices") 
+```
+
+The most transactions are performed between 10 en 16:00 hours. At 12 hours the most transactions are performed.
+
+
