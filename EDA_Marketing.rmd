@@ -1,0 +1,268 @@
+---
+title: "Analytics Capstone"
+author: "Jai Prakash"
+date: "10/30/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages("e1071")
+library(e1071) 
+library(DataExplorer)
+library(dplyr) 
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(forecast)
+library(xts)
+
+#Function for Mode
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+options(scipen = 999)
+#options(scipen = 0)
+```
+
+Loading the Data from data.csv
+
+```{r , include=FALSE}
+setwd("C:/Docs/Learning/iMBA/8 Analytics/Capstone")
+trans <- as.data.frame(read.csv("data.csv"))
+attach(trans)
+```
+
+```{r}
+#Viewing data Structure
+str(trans)
+introduce(trans)
+head(trans)
+
+#backup
+transbkp <- trans
+#trans <- transbkp
+
+
+
+```
+We have 8 variables in the data set, which includes 5 which can be factors, 1 date and 2 values.
+We need to convert InvoiceDate as a Date and CustomerID as a factor for further analysis
+
+```{r}
+#Transform variables
+trans <- trans %>% mutate(InvoiceDate=as.Date(InvoiceDate, '%m/%d/%Y %H:%M'),CustomerID=as.factor(CustomerID),Country=as.factor(Country),ItemSalesPrice=Quantity*UnitPrice)
+str(trans)
+introduce(trans)
+```
+
+#Univariate Analysis
+## Continous Variables - Quantity and UnitPrice
+```{r}
+
+#Quantity
+## Central Tendencies
+summary(trans$Quantity)
+getmode(trans$Quantity)
+
+## Dispersion Measure
+range(trans$Quantity)
+quantile(trans$Quantity)
+IQR(trans$Quantity)
+var(trans$Quantity)
+sd(trans$Quantity)
+skewness(trans$Quantity)
+kurtosis(trans$Quantity)
+
+
+#UnitPrice
+## Central Tendencies
+summary(trans$UnitPrice)
+getmode(trans$UnitPrice)
+
+## Dispersion Measure
+paste("range",range(trans$UnitPrice))
+paste("quantile",quantile(trans$UnitPrice))
+paste("IQR",IQR(trans$UnitPrice))
+paste("Variance",var(trans$UnitPrice))
+paste("SD",sd(trans$UnitPrice))
+paste("skewness",skewness(trans$UnitPrice))
+paste("kurtosis",kurtosis(trans$UnitPrice))
+#hist(trans$UnitPrice,breaks = 10)
+```
+
+##Visualization - Univariate Analysis
+```{r}
+plot_boxplot(trans, by="Country",geom_boxplot_args = list("outlier.color" = "red"))
+hist(trans$Quantity[which(abs(trans$Quantity)<100)])
+hist(trans$UnitPrice[which(abs(trans$UnitPrice)<100)])
+plot_histogram(trans[which(abs(trans$Quantity)<100),],geom_histogram_args = list(bins = 30L))
+plot(trans$Quantity,trans$UnitPrice)
+```
+#Univariate Analysis
+## Categorical Variables - Country, InvoiceNo, StockCode, Description, CustomerID
+```{r}
+
+#Country
+#trans$Country
+table(trans$Country)
+table(trans$Country)/nrow(trans)
+plot_bar(trans$Country)
+plot_bar(trans$Country[-which(trans$Country =='United Kingdom')])
+sort(table(trans$StockCode),decreasing=TRUE)[1:10]
+sort(round(prop.table(table(trans$StockCode))*100,digits=4),decreasing=TRUE)[1:10]
+
+
+#Top10 values
+##Country
+sort(table(trans$Country),decreasing=TRUE)[1:10]
+sort(round(prop.table(table(trans$Country))*100,digits=4),decreasing=TRUE)[1:10]
+
+##StockCode
+length(unique(StockCode))
+sort(table(trans$StockCode),decreasing=TRUE)[1:10]
+sort(round(prop.table(table(trans$StockCode))*100,digits=4),decreasing=TRUE)[1:10]
+###Discounts
+count(trans[Description=="Discount",])
+
+
+##Description
+sort(table(trans$Description),decreasing=TRUE)[1:10]
+sort(round(prop.table(table(trans$Description))*100,digits=4),decreasing=TRUE)[1:10]
+
+##CustomerID
+length(unique(CustomerID))
+sort(table(trans$CustomerID),decreasing=TRUE)[1:10]
+sort(round(prop.table(table(trans$CustomerID))*100,digits=4),decreasing=TRUE)[1:10]
+
+##InvoiceDate
+str(trans)
+class(InvoiceDate)
+#yyyymm=make_date(year = year(InvoiceDate),month = month(InvoiceDate))
+#sort(table(yyyymm),decreasing=TRUE)[1:10]
+#sort(round(prop.table(table(yyyymm))*100,digits=4),decreasing=TRUE)[1:10]
+#unique(substr(InvoiceDate,5,10))
+#str(trans)
+
+##InvoiceID
+length(unique(InvoiceNo))
+
+Cancelled<- ifelse(substr(InvoiceNo,1,1)=="C","Y","N")
+trans<-cbind(trans,Cancelled)
+prop.table(table(Cancelled))
+
+#trans <- trans[,1:9]
+```
+We have about 24% of records which are missing Customer ID. These can be removed as they will not help with the customer segmentation analysis
+
+#Bi-Variate Analysis
+
+```{r}
+# Continuous-Continuous Variable
+plot(trans$ItemSalesPrice,trans$Quantity)
+cor(trans$ItemSalesPrice,trans$Quantity)
+```
+```{r}
+
+# Continuous-Categorical
+#Sales by Invoice
+trans.Inv <- trans %>% 
+  group_by(InvoiceNo) %>% 
+  summarise(TotalPrice=sum(ItemSalesPrice),TotalQty=sum(Quantity))
+t<- trans.Inv
+
+plot(t$TotalPrice,t$TotalQty)
+summary(t)
+getmode(t$TotalQty)
+getmode(t$TotalPrice)
+
+#Sales by Customer
+trans.Cust <- trans %>% 
+  group_by(CustomerID) %>% 
+  summarise(TotalPrice=sum(ItemSalesPrice),TotalQty=sum(Quantity))
+t<- trans.Cust
+
+plot(t$TotalPrice,t$TotalQty)
+summary(t)
+getmode(t$TotalQty)
+getmode(t$TotalPrice)
+
+#Sales by Product
+trans.Prod <- trans %>% 
+  group_by(StockCode) %>% 
+  summarise(TotalPrice=sum(ItemSalesPrice),TotalQty=sum(Quantity))
+t<- trans.Prod
+
+plot(t$TotalPrice,t$TotalQty)
+summary(t)
+getmode(t$TotalQty)
+getmode(t$TotalPrice)
+
+#Sales by Country
+trans.Country <- trans %>% 
+  group_by(Country) %>% 
+  summarise(TotalPrice=sum(ItemSalesPrice),TotalQty=sum(Quantity),CustCount=length(unique(CustomerID)))
+t<- trans.Country
+
+plot(t$TotalPrice,t$TotalQty)
+plot(t$Country,t$CustCount,type="h")
+summary(t)
+getmode(t$TotalQty)
+getmode(t$TotalPrice)
+
+```
+```
+
+
+```{r}
+
+#Missing Value
+plot_missing(trans)
+
+#Missing Description
+count(trans[Description=="",])
+
+#Negative Price
+count(trans[UnitPrice<=0.01,])
+
+#Negative Quantity but not Cancelled items
+count(trans[Quantity<=0 & Cancelled=="N",])
+
+#Invalid Descriptions
+length(unique(trans$Description[str_length(Description)<=8]))
+
+###Non-Numeric Stock Codes
+sort(unique(trans$StockCode),decreasing=TRUE)[1:33]
+
+
+#Box Plot for Outliers
+plot_boxplot(trans, by="Country",geom_boxplot_args = list("outlier.color" = "red"))
+```
+
+
+```{r}
+#Data Cleanup
+#Remove missing customer repords
+trans<- trans[-which(is.na(trans$CustomerID)),]
+#summary(trans$CustomerID)
+
+#Remove records which are outliers
+trans[which(abs(trans$Quantity)>50000),]
+trans<- trans[-which(abs(trans$Quantity)>50000),]
+
+head(trans[which(trans$Quantity<0),])
+head(trans[which(trans$UnitPrice<0.1),])
+
+trans[which(abs(trans$UnitPrice)>5000),]
+trans<- trans[-which(abs(trans$UnitPrice)>5000),]
+
+#trans[which(abs(trans$Quantity)>20000),]
+#trans[which(abs(trans$UnitPrice)>5000),]
+#sum(trans$Quantity[which(abs(trans$UnitPrice)==0)])
+#sum(trans$Quantity)
+```
+
+
