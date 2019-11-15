@@ -1,0 +1,231 @@
+---
+title: "MB Analysis"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+library(dplyr) #data manipulation
+library(readr) #input/output
+library(data.table) #data manipulation
+library(stringr) #string manipulation
+library(caret)  #model evaluation (confusion matrix)
+library(tibble) #data wrangling
+library("ROSE") #over/under sampling
+library("randomForest") #random forest model building
+library(pROC) #ROC plots
+library("MLmetrics") #Normalized Gini
+library(cowplot)
+library(arules)
+library(arulesViz)
+library(methods)
+library(skimr)
+library(treemap)
+library(hms)
+```
+
+
+```{r}
+#read csv into R dataframe
+retail <- read.csv('data.csv',stringsAsFactors = FALSE)
+```
+
+```{r}
+#read csv into R dataframe# There are some invoices which were cancelled. 
+# This captures the invoices that start with "C" and these were the invoices that got cancelled
+k <- retail %>%
+  filter(grepl("C", retail$InvoiceNo)) %>%
+  summarise(Total = n())
+
+# There are total - 9288 such invoices 
+
+# You may use them this information to see who are these customers if you want. You may
+# as well delete them. 
+
+retail  <- retail %>% 
+  filter(!grepl("C", retail$InvoiceNo))  # This reomves all rows where the invoices do not start with C
+
+# remove all the rows with negative quantity
+retail  <- retail %>% 
+  filter(Quantity > 0)
+
+#keeping the rows that don't have any misisng values
+retail <- retail[complete.cases(retail), ]
+
+
+# remove na in descr
+retail <- retail %>% 
+  filter(!is.na(Description))
+
+# remove non product related code
+# Non-product related codes
+stc <- c('AMAZONFEE', 'BANK CHARGES', 'C2', 'DCGSSBOY', 'DCGSSGIRL',
+         'DOT', 'gift_0001_', 'PADS', 'POST')
+
+```
+
+```{r, echo=FALSE}
+retail %>%  
+  filter(grepl(paste(stc, collapse="|"), StockCode))  %>% 
+  group_by(StockCode, Description) %>% 
+  summarise(count =n()) %>%
+  arrange(desc(count)) %>% 
+  ungroup()
+```
+
+```{r, echo=FALSE}
+retail <- filter(retail, !grepl(paste(stc, collapse="|"), StockCode))
+```
+
+# We need to arrange data in a user-item format, where "users" can be either customers or orders. 
+# Given that there are almost 5 times as many Orders as there are Customers, we will be using InvoiceNo for orders in the analysis,
+# which should make for a richer information set.
+
+```{r, echo=FALSE}
+# Check the number of unique invoices and unique customers 
+sapply(retail[,c('InvoiceNo','CustomerID')], function(x) length(unique(x)))
+
+```
+
+```{r, echo=FALSE}
+# some basic data prep
+retail <- retail %>%
+  # Setting 'Description' and 'Country' as factors
+  mutate(Description = as.factor(Description)) %>%
+  mutate(Country = as.factor(Country)) %>% 
+  # Changing 'InvoiceNo' type to numeric
+  mutate(InvoiceNo = as.numeric(InvoiceNo)) %>% 
+  # Extracting 'Date' and 'Time' from 'InvoiceDate'
+  mutate(Date = format(as.POSIXct(strptime(InvoiceDate,"%m/%d/%Y %H:%M",tz="")) ,format = "%m/%d/%Y")) %>% 
+  mutate(Time = format(as.POSIXct(strptime(InvoiceDate,"%m/%d/%Y %H:%M",tz="")) ,format = "%H:%M")) 
+
+```
+
+# Some EDA
+
+```{r, echo=FALSE}
+#What item do people buy more often?
+retail %>% 
+  group_by(Description) %>% 
+  summarize(count = n()) %>% 
+  top_n(10, wt = count) %>%
+  arrange(desc(count)) %>% 
+  ggplot(aes(x = reorder(Description, count), y = count))+
+  geom_bar(stat = "identity", fill = "royalblue", colour = "blue") +
+  labs(x = "", y = "Top 10 Best Sellers") +
+  coord_flip() +
+  theme_grey(base_size = 12)
+```
+
+```{r, echo=FALSE}
+#Top 10 most sold products represent around 3% of total items sold by the company
+retail %>% 
+  group_by(Description) %>% 
+  summarize(count = n()) %>% 
+  mutate(pct=(count/sum(count))*100) %>% 
+  arrange(desc(pct)) %>% 
+  ungroup() %>% 
+  top_n(10, wt=pct)
+
+```
+
+```{r, echo=FALSE}
+#Lunchtime is the preferred time for shopping online, with the majority of orders places between 12 noon and 3pm.
+#retail %>% 
+#  ggplot(aes(hour(hms(Time)))) + 
+#  geom_histogram(stat = "count",fill = "#E69F00", colour = "red") +
+#  labs(x = "Hour of Day", y = "") +
+#  theme_grey(base_size = 12)
+
+```
+
+```{r, echo=FALSE}
+# average no item per purchase
+retail %>% 
+  group_by(InvoiceNo) %>% 
+  summarise(n = mean(Quantity)) %>%
+  ggplot(aes(x=n)) +
+  geom_histogram(bins = 100000, fill = "purple", colour = "black") + 
+  coord_cartesian(xlim=c(0,100)) +
+  scale_x_continuous(breaks=seq(0,100,10)) +
+  labs(x = "Average Number of Items per Purchase", y = "") +
+  theme_grey(base_size = 14)
+
+```
+
+```{r, echo=FALSE}
+#avg value of order
+retail %>% 
+  mutate(Value = UnitPrice * Quantity) %>% 
+  group_by(InvoiceNo) %>% 
+  summarise(n = mean(Value)) %>%
+  ggplot(aes(x=n)) +
+  geom_histogram(bins = 200000, fill="firebrick3", colour = "sandybrown") + 
+  coord_cartesian(xlim=c(0,100)) +
+  scale_x_continuous(breaks=seq(0,100,10)) +
+  labs(x = "Average Value per Purchase", y = "") + 
+  theme_grey(base_size = 14)
+
+```
+
+
+
+# Preparing transaction data for Invoice level for Basket Analysis
+
+```{r, echo=FALSE}
+#The R function paste() concatenates vectors to character and separated results using collapse=[any optional charcater string ]. Here ',' is used
+library('plyr')
+transactionData <- ddply(retail,c("InvoiceNo","Date"),
+                         function(df1)paste(df1$Description,
+                                            collapse = ","))
+
+transactionData$InvoiceNo <-NULL
+transactionData$Date <- NULL
+
+colnames(transactionData) <- c("items")
+
+write.csv(transactionData,"market_basket.csv", quote = FALSE, row.names = TRUE)
+tr <- read.transactions('market_basket.csv', format = 'basket', sep=',')
+
+#tr<-as(transactionData,"transactions") not working properly
+
+summary(tr)
+```
+
+```{r, echo=FALSE}
+# Plot item frequency
+itemFrequencyPlot(tr, topN=20, type='absolute')
+```
+
+# Support is the probability of the event (LHS) to happen and Confidence is the conditional probability that the event (RHS) will happen. Lift is the ratio of confidence to expected confidence. It tells us how much better a rule is at predicting something rather than randomly guessing. So higher the Lift stronger the association.
+
+
+```{r, echo=FALSE}
+# create some rules
+rules <- apriori(tr, parameter = list(supp=0.001, conf=0.8))
+rules <- sort(rules, by='confidence', decreasing = TRUE)
+summary(rules)
+```
+
+```{r, echo=FALSE}
+#Inspect Rules
+inspect(rules[1:20])
+```
+
+```{r, echo=FALSE}
+#Top rules
+topRules <- rules[1:10]
+
+plot(topRules)
+
+plot(topRules, method="graph")
+```
+
+```{r, echo=FALSE}
+#read csv into R dataframe
+```
